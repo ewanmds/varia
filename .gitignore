@@ -1,0 +1,27 @@
+__pycache__/
+*.pyc
+secrets.enc
+*.tmp
+data/
+.pytest_cache/
+.superpowers/
+.venv/
+.chrome-var/
+browser_extension/bridge_config.js
+
+# Local secrets and machine/session state
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.db
+*.sqlite
+*.sqlite3
+*.log
+*.pid
+
+# Internal reports can contain account balances and operator-specific details.
+docs/superpowers/

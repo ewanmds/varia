@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bot arbitrage HL ↔ Var</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main class="wrap">
+    <div id="mode_banner" class="mode-banner mode-banner--paper">MODE PAPER</div>
+
+    <header class="head">
+      <h1 id="app_title">Bot arbitrage <span class="muted">HL ↔ Var</span></h1>
+      <div id="wallet_pill" class="pill pill--off">Wallet non connecté</div>
+    </header>
+
+    <!-- Step 1: connect -->
+    <section class="card">
+      <h2><span class="step">1</span> Connexion wallet</h2>
+      <p class="muted">Connecte ton wallet et signe un message (aucune transaction) pour prouver la propriété.</p>
+      <button id="btn_connect" class="btn btn--primary">Connecter le wallet</button>
+      <div id="account_row" class="kv hidden"><span>Compte</span><code id="account_addr"></code></div>
+    </section>
+
+    <!-- Step 2: approve agent -->
+    <section class="card legacy">
+      <h2><span class="step">2</span> Agent de trading</h2>
+      <p class="muted">Signe l'approbation EIP-712 d'un agent. Le bot trade avec cet agent, ta clé principale n'est jamais exposée.</p>
+      <button id="btn_approve" class="btn" disabled>Approuver l'agent</button>
+      <div id="agent_status" class="kv"><span>Statut</span><code id="agent_status_val">(en attente)</code></div>
+    </section>
+
+    <!-- Step 3: control -->
+    <section class="card">
+      <h2><span class="step" id="step_launch">3</span> Lancement</h2>
+      <div class="threshold legacy">
+        <label for="edge_slider" class="threshold__label">Seuil d'inefficience (pb)</label>
+        <input id="edge_slider" type="range" min="1" max="20" step="0.5" value="15" />
+        <output id="edge_val" for="edge_slider" class="threshold__val">15</output>
+        <button id="btn_edge_apply" class="btn btn--small">Appliquer</button>
+        <span id="edge_msg" class="threshold__msg muted" aria-live="polite"></span>
+      </div>
+      <div class="controls">
+        <button id="btn_start" class="btn btn--primary" disabled>Démarrer</button>
+        <button id="btn_stop" class="btn" disabled title="Arrêter : ferme les positions puis arrête le bot">Arrêter</button>
+        <button id="btn_kill" class="btn btn--danger">Arrêt d'urgence</button>
+        <span class="muted">Arrêter : ferme les positions puis arrête le bot</span>
+      </div>
+      <div id="start_progress" class="start-progress hidden" role="status" aria-live="polite">
+        <span class="spinner" aria-hidden="true"></span>
+        <div>
+          <div id="start_title" class="start-progress__title">Démarrage du bot</div>
+          <div id="start_step" class="start-progress__step">Préparation</div>
+        </div>
+      </div>
+      <p id="s_error" class="error hidden"></p>
+    </section>
+
+    <!-- Lights -->
+    <section class="card">
+      <h2>Voyants</h2>
+      <div id="lights" class="lights">
+        <div class="light" id="light_session"><span class="light-label">Session Var</span><strong class="light-val">?</strong></div>
+        <div class="light legacy" id="light_ws"><span class="light-label">WS HL</span><strong class="light-val">?</strong></div>
+        <div class="light" id="light_strikes"><span class="light-label">Strikes</span><strong class="light-val">0</strong></div>
+        <div class="light legacy" id="light_margin"><span class="light-label">Marge HL</span><strong class="light-val">0 %</strong></div>
+        <div class="light legacy" id="light_hlrate"><span class="light-label">Requêtes HL restantes</span><strong class="light-val">?</strong></div>
+        <div class="light" id="light_balance"><span class="light-label">Solde Var</span><strong class="light-val">0 $</strong></div>
+        <div class="light" id="light_session_pnl"><span class="light-label">PnL session</span><strong class="light-val">0 $</strong><span class="light-sub" id="session_sub"></span></div>
+        <div class="light" id="light_pnl"><span class="light-label">PnL du jour</span><strong class="light-val">0 $</strong></div>
+      </div>
+    </section>
+
+    <!-- Paire pétrole (visible quand status.pair existe) -->
+    <section id="pair_card" class="card hidden">
+      <h2>Paire pétrole</h2>
+      <div class="pair-head">
+        <strong id="pair_state" class="pair-state">?</strong>
+        <span id="pair_reason" class="muted"></span>
+        <button id="btn_pair_resume" class="btn btn--small hidden">Débloquer</button>
+      </div>
+      <div id="pair_grid" class="lights pair-grid">
+        <div class="light"><span class="light-label">Sens</span><strong id="pair_side">-</strong><span class="light-sub" id="pair_legs"></span></div>
+        <div class="light"><span class="light-label" id="pair_ratio_label">Ratio WTI / Brent</span><strong id="pair_ratio">-</strong><span class="light-sub" id="pair_z"></span></div>
+        <div class="light"><span class="light-label" id="pair_next_label">Prochain cycle</span><strong id="pair_next">-</strong></div>
+        <div class="light"><span class="light-label">Prochain cycle volume</span><strong id="pair_next_volume">-</strong></div>
+        <div class="light"><span class="light-label">Cycles</span><strong id="pair_cycles">0</strong></div>
+        <div class="light"><span class="light-label">Volume session</span><strong id="pair_vol_session">-</strong></div>
+        <div class="light"><span class="light-label">Volume du jour</span><strong id="pair_vol_day">-</strong></div>
+        <div class="light"><span class="light-label">PnL session</span><strong id="pair_pnl">-</strong><span class="light-sub" id="pair_pnl_sub"></span></div>
+        <div class="light"><span class="light-label">PnL du jour</span><strong id="pair_pnl_day">-</strong></div>
+        <div class="light" id="pair_cost_box"><span class="light-label">Coût $/M</span><strong id="pair_cost">-</strong></div>
+        <div class="light"><span class="light-label">Glissement moyen</span><strong id="pair_slip">-</strong></div>
+        <div class="light"><span class="light-label">Demi-spread moyen</span><strong id="pair_half">-</strong></div>
+        <div class="light"><span class="light-label">Stratégie</span><strong id="pair_signal_mode">-</strong></div>
+        <div class="light"><span class="light-label">Coût aller-retour estimé</span><strong id="pair_quote_cost">-</strong><span class="light-sub">Spreads RFQ + réserve, en pb d'une jambe</span></div>
+      </div>
+      <div class="pair-params">
+        <label>Taille par jambe ($) <input id="pair_leg_usd" type="number" min="1000" max="10000" step="500" /></label>
+        <label>Contrôle (min) <input id="pair_cycle_min" type="number" min="1" max="60" step="1" /></label>
+        <label>Cycle volume (min, 0 = désactivé) <input id="pair_volume_cycle_min" type="number" min="0" max="60" step="1" /></label>
+        <label>Perte max/jour ($) <input id="pair_loss" type="number" min="20" max="1000" step="10" /></label>
+        <button id="btn_pair_apply" class="btn btn--small">Appliquer</button>
+        <span id="pair_msg" class="threshold__msg muted" aria-live="polite"></span>
+      </div>
+    </section>
+
+    <!-- Markets -->
+    <section class="card legacy" id="markets_card">
+      <h2>Marchés</h2>
+      <div class="table-wrap">
+        <table id="markets">
+          <thead><tr>
+            <th>Marché</th><th>Mode</th><th>État</th><th>Motif</th><th>Écart / seuil pb</th><th>Var bid/ask</th><th>Âge RFQ</th>
+            <th>Âge Var ws</th><th>HL bid/ask</th><th>Âge bbo HL</th><th>Nos ordres</th><th>Pos HL</th><th>Pos Var</th>
+            <th>Delta $</th><th>Basis</th><th>Basis rapide</th><th>Non couvert</th><th>Paramètres</th><th>Actions</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Arbs -->
+    <section class="card">
+      <h2 id="arbs_title">Derniers arbitrages</h2>
+      <div class="table-wrap">
+        <table id="arbs">
+          <thead><tr>
+            <th>Heure</th><th>Marché</th><th>HL</th><th>Var</th><th>Écart</th><th>PnL</th><th>Statut</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Incidents -->
+    <section class="card">
+      <h2>Derniers incidents</h2>
+      <div class="table-wrap">
+        <table id="incidents">
+          <thead><tr><th>Heure</th><th>Marché</th><th>Niveau</th><th>Message</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <script src="/static/app.js?v=tv-1m-volume-required-20261013"></script>
+</body>
+</html>

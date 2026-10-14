@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Bot paire pétrole — session Chrome",
+  "version": "1.0.0",
+  "minimum_chrome_version": "116",
+  "description": "Relie le bot local à l'onglet Omni de votre Chrome habituel.",
+  "permissions": ["scripting", "alarms"],
+  "host_permissions": ["https://omni.variational.io/*", "http://127.0.0.1/*"],
+  "background": {"service_worker": "background.js"},
+  "action": {"default_title": "Bot pétrole : connexion locale"}
+}

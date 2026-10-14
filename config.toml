@@ -1,0 +1,112 @@
+[global]
+var_transport = "extension"
+var_cdp_port = 9223
+var_quote_interval_s = 2.0
+var_min_interval_s = 0.25
+quote_max_age_s = 5.0
+quote_cancel_age_s = 8.0
+hl_ws_stall_s = 10.0
+hl_book_max_age_s = 10.0
+hedge_retry_s = 8.0
+max_gross_usd = 1000
+max_daily_loss_usd = 50
+hl_margin_ratio_max = 0.6
+var_liq_distance_min = 0.08
+close_start_min = 20
+close_taker_min = 10
+close_flat_min = 5
+reopen_delay_min = 5
+reopen_wide_min = 15
+var_max_slippage = 0.001
+reconcile_interval_s = 10
+strike_window_s = 600
+strike_max = 3
+var_daily_strike_max = 5
+min_reprice_interval_s = 5.0
+hl_min_request_headroom = 2000
+deadman_renew_s = 60
+deadman_window_s = 120
+
+[[market]]
+var_asset = "US100S"
+enabled = false  # 23/09 : pas d'occasions de prise sur retard (analyse 2 h)
+fill_usd = 500
+min_edge_bps = 1.5
+max_position_usd = 500
+var_kind = "index"
+hl_coin = "xyz:XYZ100"
+
+[[market]]
+var_asset = "US500S"
+enabled = false  # 23/09 : pas d'occasions de prise sur retard (analyse 2 h)
+fill_usd = 500
+min_edge_bps = 1.5
+max_position_usd = 500
+var_kind = "index"
+hl_coin = "xyz:SP500"
+
+[[market]]
+var_asset = "XAGS"
+enabled = false  # argent désactivé le 23/09 : prime HL durable, pas une inefficience
+fill_usd = 500
+min_edge_bps = 1.5
+max_position_usd = 500
+var_kind = "commodity"
+hl_coin = "xyz:SILVER"
+
+[[market]]
+var_asset = "XAUS"
+enabled = false  # 23/09 : pas d'occasions de prise sur retard (analyse 2 h)
+fill_usd = 500
+min_edge_bps = 1.5
+max_position_usd = 500
+var_kind = "commodity"
+hl_coin = "xyz:GOLD"
+
+[[market]]
+var_asset = "USOILP"
+entry_mode = "lag_taker"  # 23/09 : Var mène HL d'environ 0,5 s (analyse 2 h)
+slip_reserve_bps = 0.5
+fill_usd = 500
+min_edge_bps = 1.5
+max_position_usd = 500
+var_kind = "commodity"
+hl_coin = "xyz:CL"
+basis_mode = "ema"
+roll_block = true
+
+[[market]]
+var_asset = "UKOILP"
+entry_mode = "lag_taker"  # 23/09 : Var mène HL d'environ 0,5 s (analyse 2 h)
+slip_reserve_bps = 0.5
+fill_usd = 500
+min_edge_bps = 1.5
+max_position_usd = 500
+var_kind = "commodity"
+hl_coin = "xyz:BRENTOIL"
+basis_mode = "ema"
+roll_block = true
+
+[pair]
+enabled = true
+signal_mode = "trend_hold"
+trend_source = "tradingview"
+tv_wti_symbol = "TVC:USOIL"
+tv_brent_symbol = "TVC:UKOIL"
+trend_window_min = 5
+trend_confirm_min = 2
+trend_min_move_bps = 3.0
+trend_min_r2 = 0.4
+trend_cost_multiplier = 1.5
+trend_projection_min = 10
+trend_slip_reserve_bps = 2.0
+leg_usd = 1000
+tranche_usd = 500
+cycle_min = 1
+volume_cycle_min = 5
+volume_cycle_required = true
+z_window_min = 60
+order_gap_s = 1.0
+max_slippage = 0.001
+daily_loss_usd = 200
+var_leverage = 5
