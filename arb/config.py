@@ -193,6 +193,7 @@ class PairCfg:
     signal_mode: str = "mean_reversion"
     trend_window_min: int = 30
     trend_confirm_min: int = 5
+    trend_context_min: int = 0
     trend_min_move_bps: float = 3.0
     trend_min_r2: float = 0.4
     trend_cost_multiplier: float = 1.5
@@ -228,6 +229,9 @@ class PairCfg:
             raise ValueError("volume_cycle_required doit être booléen")
         if not (5 <= self.trend_window_min <= 120 and 2 <= self.trend_confirm_min < self.trend_window_min):
             raise ValueError("fenêtres de tendance invalides")
+        if (not isinstance(self.trend_context_min, int) or isinstance(self.trend_context_min, bool)
+                or not (self.trend_context_min == 0 or self.trend_window_min < self.trend_context_min <= 120)):
+            raise ValueError("fenêtre de contexte invalide")
         if not all(math.isfinite(v) for v in (self.trend_min_move_bps, self.trend_min_r2,
                                              self.trend_cost_multiplier, self.trend_slip_reserve_bps)):
             raise ValueError("seuil de tendance non fini")

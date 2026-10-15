@@ -341,7 +341,7 @@ async def test_double_failure_mid_cycle_pauses():
 async def test_reconciliation_gap_blocks():
     o, var, clock = await make()
 
-    async def fake_run(steps, prices):  # « exécuté » sans que Var ne bouge que la jambe WTI
+    async def fake_run(steps, prices, **kwargs):  # « exécuté » sans que Var ne bouge que la jambe WTI
         var.pos["USOILP"] = -55.0
         return ExecResult(ok=True)
 
@@ -612,9 +612,9 @@ async def test_close_prices_use_last_known_price():
     seen = []
     real = o.executor.run_steps
 
-    async def spy(steps, prices):
+    async def spy(steps, prices, **kwargs):
         seen.append(dict(prices))
-        return await real(steps, prices)
+        return await real(steps, prices, **kwargs)
 
     o.executor.run_steps = spy
     o.stream.latest = lambda asset: None  # flux perdu
@@ -691,7 +691,7 @@ async def test_unexpected_error_in_cycle_blocks_reconciles_and_delays():
     o, var, clock = await make(journal=j)
     calls = []
 
-    async def boom(steps, prices):
+    async def boom(steps, prices, **kwargs):
         calls.append(clock.t)
         raise RuntimeError("panne imprévue")
 
@@ -712,7 +712,7 @@ async def test_unexpected_error_in_close_blocks_and_waits_before_retry():
     await o.tick()  # paire ouverte
     calls = []
 
-    async def boom(steps, prices):
+    async def boom(steps, prices, **kwargs):
         calls.append(clock.t)
         raise RuntimeError("panne imprévue")
 

@@ -95,6 +95,7 @@ tv_wti_symbol = "TVC:USOIL"
 tv_brent_symbol = "TVC:UKOIL"
 trend_window_min = 5
 trend_confirm_min = 2
+trend_context_min = 30
 trend_min_move_bps = 3.0
 trend_min_r2 = 0.4
 trend_cost_multiplier = 1.5

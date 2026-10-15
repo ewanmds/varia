@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import NamedTuple, Optional
 
 from arb.config import PairCfg
+from arb.journal import SafeJournal
 from arb.var_client import VarRateLimited, VarRejected
 from arb.var_limiter import HEDGE
 
@@ -64,14 +65,21 @@ def _leg_slices(cur: float, target: float, tranche: float, reopen: bool) -> list
 
 
 def plan_cycle(cur: dict[str, float], target: dict[str, float], tranche: float, reopen: bool) -> list[Step]:
-    """Ordres wti, brent, wti, brent... pour passer de cur à target (fermeture reduce-only d'abord)."""
+    """Close both legs before any opening, alternating legs within each phase.
+
+    Unequal starting positions can require different numbers of closing
+    slices. Interleaving each leg's complete plan would open one leg while
+    the other still holds its previous direction during a flip.
+    """
     per = {leg: _leg_slices(cur[leg], target[leg], tranche, reopen) for leg in _LEGS}
     steps: list[Step] = []
-    for i in range(max(len(per["wti"]), len(per["brent"]))):
-        for leg in _LEGS:
-            if i < len(per[leg]):
-                side, usd, ro = per[leg][i]
-                steps.append(Step(leg, side, usd, ro))
+    for reduce_only in (True, False):
+        phase = {leg: [s for s in per[leg] if s[2] == reduce_only] for leg in _LEGS}
+        for i in range(max(len(phase["wti"]), len(phase["brent"]))):
+            for leg in _LEGS:
+                if i < len(phase[leg]):
+                    side, usd, ro = phase[leg][i]
+                    steps.append(Step(leg, side, usd, ro))
     return steps
 
 
@@ -95,10 +103,15 @@ class ExecResult:
     filled: list = field(default_factory=list)
     pos_delta_usd: dict = field(default_factory=lambda: {"wti": 0.0, "brent": 0.0})
     reason: Optional[str] = None
+    deferred: bool = False
 
 
 class _OrderFailed(Exception):
     """Ordre non exécuté ou issue inconnue : la séquence s'arrête."""
+
+
+class _EntryDeferred(_OrderFailed):
+    """Opening vetoed before market submission; no retry or rebalance is needed."""
 
 
 class _Unknown(_OrderFailed):
@@ -122,7 +135,7 @@ class PairExecutor:
     (statut en attente, erreur de sondage, 5xx ou délai sur market), on confirme par les positions."""
 
     def __init__(self, var, cfg: PairCfg, journal, clock=time.time, sleep=asyncio.sleep) -> None:
-        self.var, self.cfg, self.journal = var, cfg, journal
+        self.var, self.cfg, self.journal = var, cfg, SafeJournal.wrap(journal)
         self.clock, self.sleep = clock, sleep
 
     def _asset(self, leg: str) -> str:
@@ -153,11 +166,14 @@ class PairExecutor:
         half = (q.ask - q.bid) / 2 / q.mid * 1e4
         lat = (self.clock() - t0) * 1000.0
         fill = Fill(leg, side, qty * px, qty, quote_px, px, slip, half, lat, reduce_only)
-        self.journal.record_arb(self._asset(leg), "", 0.0, 0.0, 0.0, side, px, qty,
-                                -slip, 0.0, lat, "pair_fill")
+        self.journal.record_pair_fill(
+            self._asset(leg), "", 0.0, 0.0, 0.0, side, px, qty, -slip, 0.0, lat, "pair_fill",
+            quote_mid=q.mid, quote_px=quote_px, half_spread_bps=half, slip_bps=slip,
+            price_source="quote_proxy" if exec_px is None else "order_status",
+            qty_source="requested_unverified", reduce_only=reduce_only)
         return fill
 
-    async def _once(self, leg: str, side: str, qty: float, reduce_only: bool) -> Fill:
+    async def _once(self, leg: str, side: str, qty: float, reduce_only: bool, *, entry_guard=None) -> Fill:
         asset = self._asset(leg)
         base = (await self._read_positions())[leg]  # référence avant l'envoi
         t0 = self.clock()
@@ -167,6 +183,15 @@ class PairExecutor:
             raise _Refused(f"cotation limitée : {exc}", exc.wait_s)
         except Exception as exc:  # rien n'est parti
             raise _Refused(f"cotation échouée : {type(exc).__name__}: {exc}")
+        if not reduce_only and entry_guard is not None:
+            # This check follows every awaited read/quote immediately before
+            # the first opening. A definite refusal will repeat it on retry.
+            try:
+                veto = entry_guard()
+            except Exception as exc:
+                raise _EntryDeferred(f"entry guard unavailable ({type(exc).__name__})") from exc
+            if veto is not None:
+                raise _EntryDeferred(str(veto))
         uncertain = False
         rfq = None
         try:
@@ -221,11 +246,13 @@ class PairExecutor:
         raise _Unknown(f"issue inconnue après {_CONFIRM_WINDOW_S:.0f} s (aucun statut final, position inchangée)",
                        ctx)
 
-    async def _order(self, leg: str, side: str, qty: float, reduce_only: bool) -> Fill:
+    async def _order(self, leg: str, side: str, qty: float, reduce_only: bool, *, entry_guard=None) -> Fill:
         last: Optional[_Refused] = None
         for i in range(2):
             try:
-                return await self._once(leg, side, qty, reduce_only)
+                if entry_guard is None:
+                    return await self._once(leg, side, qty, reduce_only)
+                return await self._once(leg, side, qty, reduce_only, entry_guard=entry_guard)
             except _Refused as exc:
                 last = exc
                 if i == 0:
@@ -253,10 +280,16 @@ class PairExecutor:
                     used += out[i]
         return out
 
-    async def run_steps(self, steps: list[Step], prices: dict[str, float]) -> ExecResult:
+    async def run_steps(self, steps: list[Step], prices: dict[str, float], *, entry_guard=None) -> ExecResult:
         """Exécute les étapes. Les positions de départ sont lues sur Var : les fermetures reduce-only
-        sont exécutées en quantité, les ouvertures en usd / prix."""
+        sont exécutées en quantité, les ouvertures en usd / prix.
+
+        entry_guard synchronously returns None to allow the first opening or
+        a reason string to defer it. Once opening has begun, finish its hedge
+        phase under the existing execution safety rules.
+        """
         res = ExecResult(ok=True)
+        opening_started = False
         steps = [Step(*s) for s in steps]
         try:
             held = await self._read_positions()
@@ -271,7 +304,13 @@ class PairExecutor:
             if i:
                 await self.sleep(self.cfg.order_gap_s)
             try:
-                f = await self._order(leg, side, qty, ro)
+                if entry_guard is not None and not ro and not opening_started:
+                    f = await self._order(leg, side, qty, ro, entry_guard=entry_guard)
+                else:
+                    f = await self._order(leg, side, qty, ro)
+            except _EntryDeferred as exc:
+                res.ok, res.deferred, res.reason = False, True, str(exc)
+                return res
             except _Unknown as exc:
                 res.ok = False
                 res.reason = (f"déséquilibre possible : issue inconnue pour l'ordre {i + 1}/{len(steps)} "
@@ -291,6 +330,8 @@ class PairExecutor:
                 await self._rebalance(res)
                 return res
             self._apply(res, f)
+            if not ro:
+                opening_started = True
         # contrôle final : jamais ok=True avec une paire déséquilibrée (remplissage partiel...)
         try:
             gap = self._gap_usd(await self._valued_positions())

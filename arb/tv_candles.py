@@ -67,6 +67,10 @@ class TradingViewCandles:
         self.blocked = False
 
     async def fetch(self):
+        # Both sequential leg reads must refer to bars already closed when
+        # this poll began. A cached partial bar must never become a close
+        # merely because the wall clock passes its end before the next poll.
+        fetch_started = self.clock()
         from websockets.asyncio.client import connect
         connector = self.connect or connect
         async with connector(URL, origin="https://www.tradingview.com", open_timeout=10,
@@ -95,6 +99,7 @@ class TradingViewCandles:
                                 closes.update(parse_closes(params[1].get(series, {}).get("s", [])))
                             if method == "series_completed" and params[:2] == [session, series]:
                                 complete = True
+                closes = {ts: price for ts, price in closes.items() if ts + 60 <= fetch_started}
                 if not closes:
                     raise ValueError("No TradingView minute bars")
                 result.append(closes)

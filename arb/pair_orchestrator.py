@@ -17,7 +17,7 @@ from typing import Optional
 from arb.config import GlobalCfg, PairCfg
 from arb.journal import SafeJournal
 from arb.pair_exec import Fill, PairExecutor, plan_cycle, target_usd
-from arb.pair_signal import RatioSignal, TrendSignal
+from arb.pair_signal import RatioSignal, TrendSignal, select_volume_side
 from arb.tv_candles import TradingViewCandles
 from arb.schedule import parse_sessions
 from arb.var_client import VarError, parse_max_leverage
@@ -49,9 +49,11 @@ class PairOrchestrator:
         self.stream = stream if stream is not None else VarPriceStream({cfg.wti: cfg.kind, cfg.brent: cfg.kind})
         self.signal = RatioSignal(cfg.z_window_min)
         self.trend = TrendSignal(cfg.trend_window_min, cfg.trend_confirm_min,
-                                 cfg.trend_min_move_bps, cfg.trend_min_r2)
+                                 cfg.trend_min_move_bps, cfg.trend_min_r2,
+                                 context_min=cfg.trend_context_min)
         self.tv = (TradingViewCandles(cfg.tv_wti_symbol, cfg.tv_brent_symbol,
-                   window_min=cfg.trend_window_min, stale_s=cfg.tv_stale_s, clock=clock)
+                   window_min=max(cfg.trend_window_min, cfg.trend_context_min),
+                   stale_s=cfg.tv_stale_s, clock=clock)
                    if cfg.signal_mode == "trend_hold" and cfg.trend_source == "tradingview" else None)
         self._strategy_reason = None
         self._manual_entry_side = None
@@ -80,6 +82,7 @@ class PairOrchestrator:
         self._ws_reconnect_at = 0.0
         self._ws_muted = False
         self._cycle_retry_at = 0.0
+        self._last_execution_deferred = False
         self._sessions_warned = False
         self._daily_err = False
         self._lock = asyncio.Lock()  # un seul passage d'ordres à la fois (cycle, fermeture, arrêt)
@@ -423,6 +426,64 @@ class PairOrchestrator:
                 await self._close_pair(self._flat_reason)
                 return
 
+    def _cycle_ready(self) -> bool:
+        """Recheck cycle guards after awaited reads; risk closures use their own path."""
+        if self.killed or self.state != ACTIVE:
+            return False
+        now = self.clock()
+        phase, why = self._phase(now)
+        if phase != "open":
+            self._strategy_reason = why
+            return False
+        if not self._fresh(now):
+            self._strategy_reason = "flux de prix muet ou en préchauffage"
+            return False
+        if self._strikes_suspended():
+            self._set_state(PAUSE, STRIKES_REASON)
+            return False
+        return True
+
+    def _current_trend_decision(self):
+        """Read one coherent TV snapshot, including a poll completed during an await."""
+        if self.tv is not None:
+            snapshot = self.tv.snapshot(self.clock())
+            if not snapshot["ready"]:
+                self._strategy_reason = snapshot["reason"]
+                self._cycle_retry_at = self.clock() + 30
+                return None
+            self.trend.replace_closed(snapshot["points"], self.clock())
+        return self.trend.status()
+
+    def _entry_veto(self, planned_side, current_side, *, manual=False, initial=False,
+                    volume_due=False, volume_action=False):
+        """Synchronous check used again after the executor's first opening RFQ."""
+        if not self._cycle_ready():
+            reason = (self.kill_reason if self.killed else self.reason if self.state != ACTIVE
+                      else self._strategy_reason) or "cycle différé par les gardes"
+            self._strategy_reason = reason
+            self._cycle_retry_at = self.clock() + (1 if self._fresh(self.clock()) else 30)
+            return reason
+        if manual or self.cfg.signal_mode != "trend_hold":
+            return None
+        latest = self._current_trend_decision()
+        if latest is None:
+            return self._strategy_reason
+        if not latest["ready"] and not initial:
+            self._strategy_reason = latest["reason"]
+            self._cycle_retry_at = self.clock() + 30
+            return self._strategy_reason
+        if initial and not latest["ready"]:
+            latest_side = self.pref_side or self.cfg.warmup_entry_side
+        elif volume_due or volume_action:
+            latest_side = select_volume_side(latest, current_side, self.pref_side)
+        else:
+            latest_side = latest["side"]
+        if latest_side != planned_side:
+            self._strategy_reason = "signal modifié pendant les lectures : cycle différé"
+            self._cycle_retry_at = self.clock() + 1
+            return self._strategy_reason
+        return None
+
     async def _cycle(self) -> None:
         async with self._lock:
             if self.killed or self.state != ACTIVE:
@@ -432,6 +493,8 @@ class PairOrchestrator:
             except Exception as exc:
                 self.journal.record_incident("PAIR", "warn", f"cycle reporté : positions illisibles ({exc})")
                 self._cycle_retry_at = self.clock() + _CLOSE_RETRY_S
+                return
+            if not self._cycle_ready():
                 return
             try:
                 await self._cycle_orders(pos)
@@ -468,6 +531,8 @@ class PairOrchestrator:
                       and self._last_cycle_end is not None
                       and self.clock() >= self._last_cycle_end + self.cfg.volume_cycle_min * 60)
         recycle = False
+        volume_action = False
+        initial = False
         required_volume = self.cfg.volume_cycle_required and self.cfg.volume_cycle_min > 0
         if manual_side is not None:
             side = manual_side
@@ -476,11 +541,9 @@ class PairOrchestrator:
             self._quoted_cost_bps = None
             self._cycle_retry_at = self.clock() + self.cfg.cycle_min * 60
         elif self.cfg.signal_mode == "trend_hold":
-            if self.tv is not None and not self.tv.snapshot(self.clock())["ready"]:
-                self._strategy_reason = self.tv.snapshot(self.clock())["reason"]
-                self._cycle_retry_at = self.clock() + 30
+            decision = self._current_trend_decision()
+            if decision is None:
                 return
-            decision = self.trend.status()
             side = decision["side"]
             self._strategy_reason = decision["reason"]
             initial = not decision["ready"] and self.cfg.warmup_entry_side is not None
@@ -490,22 +553,24 @@ class PairOrchestrator:
             self._projected_move_bps = (abs(decision["slope_bps_min"]) * self.cfg.trend_projection_min
                                         if decision["slope_bps_min"] is not None else None)
             self._cycle_retry_at = self.clock() + (self.cfg.cycle_min * 60 if decision["ready"] else 30)
+            if not decision["ready"] and not initial:
+                # A ready fast window cannot stand in for missing context/history.
+                return
             if self.cfg.volume_cycle_min > 0 and cur_side and self._last_cycle_end is not None:
                 due = self._last_cycle_end + self.cfg.volume_cycle_min * 60
                 if due > self.clock():
                     self._cycle_retry_at = min(self._cycle_retry_at, due)
             volume_action = required_volume and (volume_due or (cur_side is None and decision["ready"]))
-            if side is None:
-                if not volume_due and not volume_action:
-                    if cur_side:
-                        self._strategy_reason += " : paire conservée"
-                    return
-                if cur_side is not None:
-                    side = cur_side
-                else:
-                    slope = decision["slope_bps_min"]
-                    side = self.pref_side or ("A" if slope is not None and slope < 0 else "B")
-                    self._strategy_reason += " : entrée volume sans confirmation de tendance"
+            if volume_due or volume_action:
+                # Keep the existing cadence, but use the current directional
+                # evidence before either an adopted or a previous position.
+                side = select_volume_side(decision, cur_side, self.pref_side)
+                if decision["side"] is None:
+                    self._strategy_reason += " : direction volume sans confirmation court terme"
+            elif side is None:
+                if cur_side:
+                    self._strategy_reason += " : paire conservée"
+                return
             recycle = volume_due and side == cur_side
             resize = side == cur_side and any(
                 abs(abs(self._usd(pos[leg], leg)) - self.cfg.leg_usd) > self.cfg.tranche_usd / 2
@@ -519,12 +584,20 @@ class PairOrchestrator:
                 # slippage, position balance and all risk/session guards still apply.
                 self._quoted_cost_bps = None
                 self._strategy_reason += " : cycle volume obligatoire"
-            elif not await self._trend_cost_gate(initial=initial, volume=recycle):
+            elif not await self._trend_cost_gate(initial=initial, volume=volume_due):
                 return
             if recycle:
                 self._strategy_reason += " : cycle volume, fermeture puis réouverture"
         else:
             side = self.signal.side(self.pref_side or "A")
+        # RFQ reads above can cross a session boundary, lose their feed or race a stop.
+        # Defer a changed signal rather than executing a different, unquoted plan.
+        def entry_guard():
+            return self._entry_veto(side, cur_side, manual=manual_side is not None, initial=initial,
+                                    volume_due=volume_due, volume_action=volume_action)
+
+        if entry_guard() is not None:
+            return
         flip = cur_side is not None and side != cur_side
         if self.cfg.signal_mode == "trend_hold" and side == cur_side and not recycle:
             cur = {leg: self._usd(pos[leg], leg) for leg in _LEGS}
@@ -536,8 +609,13 @@ class PairOrchestrator:
         # Consume before execution: uncertain/failed fills never repeat a forced entry.
         if manual_side is not None:
             self._manual_entry_side = None
-        ok = await self._execute(steps, prices, "cycle")
-        self._last_cycle_end = self.clock()
+        volume_before = self._volume
+        ok = await self._execute(steps, prices, "cycle", entry_guard=entry_guard)
+        if not self._last_execution_deferred or self._volume != volume_before:
+            self._last_cycle_end = self.clock()
+        if self._last_execution_deferred and manual_side is not None and self._manual_entry_side is None:
+            # No opening could have been sent on a deferred result, including safe retries.
+            self._manual_entry_side = manual_side
         if ok:
             if manual_side is not None:
                 self._manual_entry_executed = manual_side
@@ -626,12 +704,17 @@ class PairOrchestrator:
                 self._next_close_try = self.clock() + _CLOSE_RETRY_S
             return ok and not self._has_pos()
 
-    async def _execute(self, steps, prices, label: str) -> bool:
+    async def _execute(self, steps, prices, label: str, *, entry_guard=None) -> bool:
         """Passe les ordres, comptabilise les exécutions, puis réconcilie sur les positions réelles."""
-        res = await self.executor.run_steps(steps, prices)
+        self._last_execution_deferred = False
+        res = (await self.executor.run_steps(steps, prices, entry_guard=entry_guard)
+               if entry_guard is not None else await self.executor.run_steps(steps, prices))
+        self._last_execution_deferred = bool(getattr(res, "deferred", False))
         for f in res.filled:
             self._apply_fill(f)
-        if not res.ok:
+        if self._last_execution_deferred:
+            self._strategy_reason = res.reason or "entrée différée par les gardes"
+        elif not res.ok:
             state = BLOCKED if (res.reason or "").startswith("déséquilibre") else PAUSE
             msg = f"{label} : {res.reason}"
             self._set_state(state, msg)
