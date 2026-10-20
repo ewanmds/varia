@@ -58,6 +58,13 @@ Le démarrage du serveur seul ne démarre pas les cycles.
 
 L'installation utilise `.venv`. Pour vérifier :
 
+Les lanceurs réel et simulation créent ou réparent automatiquement `.venv`
+avec Python 3.12 et installent `requirements-lock.txt` au premier lancement
+et lorsque ce fichier change. Une connexion Internet est alors nécessaire.
+Si Python 3.12 manque, installer cette version depuis python.org en cochant
+**Add python.exe to PATH**, puis relancer le `.cmd`.
+L'environnement `.venv` doit être recréé sur chaque PC, sans le copier.
+
 ```powershell
 .\.venv\Scripts\python.exe -m pip check
 .\.venv\Scripts\python.exe -m pytest -q
