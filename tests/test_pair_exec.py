@@ -201,6 +201,61 @@ async def test_one_failure_is_retried():
     assert res.ok and len(res.filled) == 8 and len(var.orders) == 8
 
 
+class StatusRejectVar(FakeVar):
+    async def market(self, quote_id, side, max_slippage, reduce_only=False, prio=0, deadline=None):
+        i = self.calls
+        if self.script.get(i) in ("terminal_reject", "partial_reject"):
+            self.calls += 1
+            self._rfq[f"r{i}"] = self.script[i]
+            if self.script[i] == "partial_reject":
+                asset, qty = self._quotes[quote_id]
+                self.pos[asset] += (1 if side == "buy" else -1) * qty * 0.1
+            return f"r{i}"
+        return await super().market(quote_id, side, max_slippage, reduce_only, prio, deadline)
+
+    async def order_status(self, rfq, prio=0, deadline=None):
+        if self._rfq[rfq] in ("terminal_reject", "partial_reject"):
+            return {"status": "rejected", "rejection_reason": "Insufficient margin"}
+        return await super().order_status(rfq, prio, deadline)
+
+
+async def test_third_slice_terminal_rejection_waits_and_requotes_before_retry():
+    var = StatusRejectVar(script={2: "terminal_reject"})
+    waits = []
+    async def sleep(seconds):
+        waits.append((var.calls, seconds))
+    cfg = PairCfg(leg_usd=1000, tranche_usd=500, order_gap_s=1)
+    steps = plan_cycle({"wti": 0, "brent": 0}, target_usd("A", 1000), 500, False)
+    result = await PairExecutor(var, cfg, J(), sleep=sleep).run_steps(steps, PRICES)
+    assert result.ok
+    assert var.calls == 5 and len(var.orders) == 4
+    assert (3, 1) in waits
+    for leg, value in usd_pos(var).items():
+        assert value == pytest.approx(target_usd("A", 1000)[leg], abs=0.2)
+
+
+async def test_repeated_terminal_rejection_exposes_reason_and_preserves_balanced_pair():
+    var = StatusRejectVar(script={2: "terminal_reject", 3: "terminal_reject"})
+    cfg = PairCfg(leg_usd=1000, tranche_usd=500, order_gap_s=0)
+    steps = plan_cycle({"wti": 0, "brent": 0}, target_usd("A", 1000), 500, False)
+    result = await PairExecutor(var, cfg, J(), sleep=nosleep).run_steps(steps, PRICES)
+    assert not result.ok and "Insufficient margin" in result.reason
+    assert var.calls == 4
+    assert abs(usd_pos(var)["wti"]) == pytest.approx(500, abs=0.2)
+    assert abs(usd_pos(var)["brent"]) == pytest.approx(500, abs=0.2)
+
+
+async def test_rejected_status_with_partial_fill_is_never_retried():
+    var = StatusRejectVar(script={0: "partial_reject"})
+    cfg = PairCfg(leg_usd=1000, tranche_usd=500, order_gap_s=0)
+    steps = plan_cycle({"wti": 0, "brent": 0}, target_usd("A", 1000), 500, False)
+    result = await PairExecutor(var, cfg, J(), sleep=nosleep).run_steps(steps, PRICES)
+    assert not result.ok and "position modifiee" in result.reason
+    assert var.calls == 2  # rejected partial fill, then reduce-only rebalance
+    assert all(order[2] for order in var.orders)
+    assert all(abs(value) < 0.2 for value in usd_pos(var).values())
+
+
 async def test_rate_limited_waits_at_least_wait_s():
     from arb.var_client import VarRateLimited
 

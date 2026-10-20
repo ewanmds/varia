@@ -31,6 +31,12 @@ peut aussi différer un retournement : la paire précédente reste alors ouverte
   Avec la tranche configurée à 500 $, une jambe de 20 $ ouvre un ordre de 20 $,
   750 $ ouvre 500 + 250 $, et 1 000 $ conserve deux ordres de 500 $.
   Les jambes restent alternées ; les seuils d'équilibrage s'adaptent aux petites tailles.
+- Après un statut final de rejet, le bot vérifie les positions, attend au moins
+  une seconde, puis demande une nouvelle cotation pour sa seconde et dernière
+  tentative. Une position modifiée ou impossible à vérifier interdit le renvoi
+  automatique de la tranche. Un rejet persistant met toujours le bot en pause,
+  avec le motif fourni par Variational lorsqu'il est disponible ; la paire
+  déjà exécutée peut rester ouverte si elle est équilibrée.
 - Source active : bougies **1 minute TradingView TVC:USOIL et TVC:UKOIL**.
 - Ratio des clôtures portant exactement le même horodatage ; la bougie en cours est exclue.
 - Une bougie doit déjà être close au début de la requête TradingView pour

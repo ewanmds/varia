@@ -36,6 +36,17 @@ _CONFIRM_POLLS = int(_CONFIRM_WINDOW_S / _CONFIRM_POLL_S)
 _BALANCE_TOL_TRANCHE = 0.1
 
 
+def _rejection_detail(status: dict) -> str:
+    """Keep the venue's reason without dumping the complete order payload."""
+    for key in ("rejection_reason", "reject_reason", "error_message", "reason", "error"):
+        value = status.get(key)
+        if isinstance(value, dict):
+            value = value.get("message") or value.get("reason") or value.get("code")
+        if isinstance(value, (str, int)) and str(value).strip():
+            return " ".join(str(value).split())[:300]
+    return "motif non fourni par Variational"
+
+
 def target_usd(side: str, leg_usd: float) -> dict[str, float]:
     """Sens A : WTI court, Brent long. Sens B : l'inverse. Montants signés en $ (positif = long)."""
     sign = 1.0 if side == "A" else -1.0
@@ -234,7 +245,17 @@ class PairExecutor:
                     return self._fill(leg, side, qty, reduce_only, q,
                                       float(price) if price not in (None, "") else None, t0)
                 if status in _FINAL_FAIL:
-                    raise _Refused(f"statut {status} pour {rfq}")
+                    detail = _rejection_detail(st)
+                    # A terminal status alone cannot prove that nothing filled.
+                    # Never resend a complete slice over a partial/late fill.
+                    try:
+                        cur = (await self._read_positions())[leg]
+                    except _OrderFailed as exc:
+                        raise _Unknown(f"statut {status} : positions non verifiables ({detail})", ctx) from exc
+                    if abs(cur - base) > max(1e-9, qty * 1e-6):
+                        raise _Unknown(f"statut {status} avec position modifiee ({detail})", ctx)
+                    raise _Refused(f"statut {status} pour {rfq} : {detail}",
+                                   wait_s=max(1.0, self.cfg.order_gap_s))
             if uncertain or rfq is not None:
                 try:
                     cur = (await self._read_positions())[leg]
