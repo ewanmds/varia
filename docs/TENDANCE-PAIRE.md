@@ -28,9 +28,13 @@ peut aussi différer un retournement : la paire précédente reste alors ouverte
 
 - 1 000 $ par jambe ; tranches de 500 $ ; contrôle toutes les minutes.
 - Taille réglable de 20 à 10 000 $ par jambe, sans obligation de multiple de 500.
-  Avec la tranche configurée à 500 $, une jambe de 20 $ ouvre un ordre de 20 $,
-  750 $ ouvre 500 + 250 $, et 1 000 $ conserve deux ordres de 500 $.
+  Chaque jambe ouvre deux demi-jambes : 20 $ ouvre 10 + 10 $,
+  500 $ ouvre 250 + 250 $, 750 $ ouvre 375 + 375 $,
+  et 1 000 $ ouvre 500 + 500 $. La tranche suit toujours la taille cible / 2.
   Les jambes restent alternées ; les seuils d'équilibrage s'adaptent aux petites tailles.
+  Les réglages sont disponibles avant le démarrage et après l'arrêt ; ils restent
+  dans la configuration en mémoire du serveur pour le prochain démarrage.
+  Pendant un cycle, l'application des réglages attend la fin du passage d'ordres.
 - Après un statut final de rejet, le bot vérifie les positions, attend au moins
   une seconde, puis demande une nouvelle cotation pour sa seconde et dernière
   tentative. Une position modifiée ou impossible à vérifier interdit le renvoi

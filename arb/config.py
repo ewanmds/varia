@@ -207,11 +207,13 @@ class PairCfg:
 
     @property
     def effective_tranche_usd(self) -> float:
-        """Cap slices and balance thresholds at the requested leg size."""
-        return min(self.tranche_usd, self.leg_usd)
+        """Each leg opens in two equal slices, including after a size change."""
+        return self.leg_usd / 2
 
     def __post_init__(self):
         import math
+        # Keep the legacy config field consistent for paper/replay consumers.
+        self.tranche_usd = self.effective_tranche_usd
         if self.signal_mode not in ("mean_reversion", "trend_hold"):
             raise ValueError("signal_mode doit être mean_reversion ou trend_hold")
         if self.warmup_entry_side not in (None, "A", "B"):

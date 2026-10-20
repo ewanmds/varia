@@ -32,7 +32,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from arb import auth as authmod
-from arb.config import ENTRY_MODES
+from arb.config import ENTRY_MODES, PairCfg
 from arb.engine import BLOCKED, IDLE
 from arb.pair_orchestrator import PairOrchestrator
 from arb.var_errors import VarError
@@ -309,12 +309,21 @@ def create_app(ctx) -> FastAPI:
             raise HTTPException(409, "mode paire pétrole inactif")
         return orch
 
+    def _pair_cfg(ctx_) -> PairCfg:
+        orch = getattr(ctx_, "orch", None)
+        if isinstance(orch, PairOrchestrator):
+            return orch.cfg
+        cfg = getattr(ctx_, "pair", None)
+        if orch is None and isinstance(cfg, PairCfg) and cfg.enabled:
+            return cfg
+        raise HTTPException(409, "mode paire pétrole inactif")
+
     @app.post("/api/pair/params")
     async def pair_params(payload: Dict[str, Any], request: Request):
         """Réglages à chaud de la paire. cycle_min s'applique au prochain décompte, leg_usd au
         prochain cycle : le cycle en cours n'est jamais interrompu (l'orchestrateur relit cfg)."""
         _require(request)
-        orch = _pair(ctx)
+        cfg = _pair_cfg(ctx)
         updates: Dict[str, float] = {}
         for k, (lo, hi) in _PAIR_BOUNDS.items():
             if k not in payload:
@@ -331,9 +340,20 @@ def create_app(ctx) -> FastAPI:
             if k == "volume_cycle_min" and 0 < v < 1:
                 raise HTTPException(400, "cycle volume : 0 ou au moins 1 minute")
             updates[k] = v
-        for k, v in updates.items():
-            setattr(orch.cfg, k, v)
-        return {"ok": True, **{k: getattr(orch.cfg, k) for k in _PAIR_BOUNDS}}
+        def apply():
+            for k, v in updates.items():
+                setattr(cfg, k, v)
+            cfg.tranche_usd = cfg.effective_tranche_usd
+
+        # Finish any in-flight cycle before changing its sizing/tolerances.
+        lock = getattr(getattr(ctx, "orch", None), "_lock", None)
+        if lock is not None:
+            async with lock:
+                apply()
+        else:
+            apply()
+        return {"ok": True, "order_usd": cfg.effective_tranche_usd,
+                **{k: getattr(cfg, k) for k in _PAIR_BOUNDS}}
 
     @app.post("/api/pair/resume")
     async def pair_resume(request: Request):
@@ -347,9 +367,16 @@ def create_app(ctx) -> FastAPI:
     @app.get("/api/status")
     async def status():
         base = ctx.orch.status() if ctx.orch else {"markets": [], "killed": False}
-        if isinstance(ctx.orch, PairOrchestrator) and isinstance(base.get("pair"), dict):
+        try:
+            cfg = _pair_cfg(ctx)
+        except HTTPException:
+            cfg = None
+        if cfg is not None:
+            if not isinstance(base.get("pair"), dict):
+                base["pair"] = {"state": "ARRÊTÉ", "reason": "bot non démarré"}
             # réglages courants, pour pré-remplir les champs de l'interface
-            base["pair"]["params"] = {k: getattr(ctx.orch.cfg, k) for k in _PAIR_BOUNDS}
+            base["pair"]["params"] = {k: getattr(cfg, k) for k in _PAIR_BOUNDS}
+            base["pair"]["order_usd"] = cfg.effective_tranche_usd
         pair_mode = bool(getattr(ctx, "_pair_mode", lambda: False)())
         base["mode"] = "pair" if pair_mode else "arb"
         if pair_mode:

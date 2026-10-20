@@ -526,14 +526,71 @@ def test_pair_params_accepts_small_and_non_multiple_legs(size):
     assert response.status_code == 200
     assert response.json()["leg_usd"] == size
     assert ctx.orch.cfg.leg_usd == size
-    assert ctx.orch.cfg.effective_tranche_usd == min(size, 500)
-    assert ctx.orch.cfg.tranche_usd == 500
+    assert ctx.orch.cfg.effective_tranche_usd == size / 2
+    assert ctx.orch.cfg.tranche_usd == size / 2
+    assert response.json()["order_usd"] == size / 2
 
 
 def test_pair_endpoints_409_without_pair_orchestrator():
     c = _client(Ctx())  # orchestrateur classique
     assert c.post("/api/pair/params", json={"cycle_min": 5}).status_code == 409
     assert c.post("/api/pair/resume").status_code == 409
+
+
+def test_pair_size_before_start_survives_start_and_stop():
+    ctx = PairCtx()
+    ctx.orch = None
+    ctx.pair = PairCfg(enabled=True, leg_usd=1000, tranche_usd=500)
+    ctx._pair_mode = lambda: ctx.pair.enabled
+    client = _client(ctx)
+    initial = client.get("/api/status").json()
+    assert initial["pair"]["params"]["leg_usd"] == 1000
+    assert initial["pair"]["order_usd"] == 500
+    assert initial["running"] is False
+    assert client.post("/api/pair/params", json={"leg_usd": 500}).status_code == 200
+    assert ctx.orch is None  # applying settings must not start trading
+    assert (ctx.pair.leg_usd, ctx.pair.tranche_usd) == (500, 250)
+    ctx.orch = FakePair()
+    ctx.orch.cfg = ctx.pair  # same object used by main.Ctx._start_pair
+    assert client.get("/api/status").json()["pair"]["order_usd"] == 250
+    assert client.post("/api/pair/params", json={"leg_usd": 750}).status_code == 200
+    assert (ctx.pair.leg_usd, ctx.pair.tranche_usd) == (750, 375)
+    ctx.orch = None
+    status = client.get("/api/status").json()
+    assert status["pair"]["params"]["leg_usd"] == 750
+    assert status["pair"]["order_usd"] == 375
+
+
+def test_pair_size_before_start_requires_auth_and_validates_atomically():
+    ctx = PairCtx()
+    ctx.orch = None
+    ctx.pair = PairCfg(enabled=True, leg_usd=1000)
+    client = _client(ctx)
+    assert client.post("/api/pair/params", json={"leg_usd": 500},
+                       headers={"x-auth-token": "bad"}).status_code == 400
+    assert client.post("/api/pair/params", json={"leg_usd": 500, "cycle_min": 100}).status_code == 400
+    assert (ctx.pair.leg_usd, ctx.pair.tranche_usd) == (1000, 500)
+    ctx.pair.enabled = False
+    assert client.post("/api/pair/params", json={"leg_usd": 500}).status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_pair_size_update_waits_for_current_cycle():
+    import asyncio
+    import httpx
+    ctx = PairCtx()
+    ctx.orch._lock = asyncio.Lock()
+    await ctx.orch._lock.acquire()
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(ctx)),
+                                 base_url="http://127.0.0.1", headers={"x-auth-token": "tok"}) as client:
+        update = asyncio.create_task(client.post("/api/pair/params", json={"leg_usd": 500}))
+        await asyncio.sleep(0.01)
+        assert not update.done()
+        assert (ctx.orch.cfg.leg_usd, ctx.orch.cfg.tranche_usd) == (5000, 2500)
+        ctx.orch._lock.release()
+        response = await update
+        assert response.status_code == 200
+        assert (ctx.orch.cfg.leg_usd, ctx.orch.cfg.tranche_usd) == (500, 250)
 
 
 def test_startup_bridge_error_is_reported_as_readable_400():

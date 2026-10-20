@@ -115,7 +115,7 @@ class J:
 async def nosleep(s): pass
 
 
-@pytest.mark.parametrize("size,slices", [(20, [20]), (50, [50]), (750, [500, 250]), (1000, [500, 500])])
+@pytest.mark.parametrize("size,slices", [(20, [10, 10]), (50, [25, 25]), (500, [250, 250]), (750, [375, 375]), (1000, [500, 500])])
 async def test_small_legs_open_flip_recycle_and_close(size, slices):
     cfg = PairCfg(leg_usd=size, tranche_usd=500, order_gap_s=0)
     var = FakeVar()

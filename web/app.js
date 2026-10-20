@@ -489,7 +489,8 @@ $("btn_pair_apply").addEventListener("click", async () => {
   };
   if (Object.values(body).some((v) => !isFinite(v))) { $("pair_msg").textContent = "Valeurs manquantes"; return; }
   try {
-    await api("/api/pair/params", { method: "POST", body: JSON.stringify(body) });
+    const applied = await api("/api/pair/params", { method: "POST", body: JSON.stringify(body) });
+    $("pair_order_size").textContent = "2 ordres de " + fmtUsd(applied.order_usd) + " par jambe";
     state.pairDirty = false;
     $("pair_msg").textContent = "Appliqué (période au prochain décompte, taille au prochain cycle)";
   } catch (e) {
@@ -573,6 +574,7 @@ function renderPair(p, s) {
   $("pair_quote_cost").textContent = fmtPb(p.quoted_roundtrip_cost_bps);
   const prm = p.params;
   if (prm && !state.pairDirty) {
+    $("pair_order_size").textContent = "2 ordres de " + fmtUsd(p.order_usd) + " par jambe";
     $("pair_leg_usd").value = prm.leg_usd;
     $("pair_cycle_min").value = prm.cycle_min;
     $("pair_volume_cycle_min").value = prm.volume_cycle_min || 0;
