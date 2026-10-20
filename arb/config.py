@@ -205,6 +205,11 @@ class PairCfg:
     tv_brent_symbol: str = "TVC:UKOIL"
     tv_stale_s: float = 90.0
 
+    @property
+    def effective_tranche_usd(self) -> float:
+        """Cap slices and balance thresholds at the requested leg size."""
+        return min(self.tranche_usd, self.leg_usd)
+
     def __post_init__(self):
         import math
         if self.signal_mode not in ("mean_reversion", "trend_hold"):

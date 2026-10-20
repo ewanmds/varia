@@ -135,7 +135,7 @@ class PairOrchestrator:
         n_open = sum(1 for leg in _LEGS if pos[leg]["qty"] != 0)
         if n_open:
             side = self._side_of(pos)
-            if side is None or abs(abs(usd["wti"]) - abs(usd["brent"])) > self.cfg.tranche_usd:
+            if side is None or abs(abs(usd["wti"]) - abs(usd["brent"])) > self.cfg.effective_tranche_usd:
                 msg = (f"{STARTUP_REASON} (WTI {usd['wti']:.0f} $, Brent {usd['brent']:.0f} $)")
                 self._set_state(BLOCKED, msg)
                 self.journal.record_incident("PAIR", "error", msg)
@@ -573,7 +573,7 @@ class PairOrchestrator:
                 return
             recycle = volume_due and side == cur_side
             resize = side == cur_side and any(
-                abs(abs(self._usd(pos[leg], leg)) - self.cfg.leg_usd) > self.cfg.tranche_usd / 2
+                abs(abs(self._usd(pos[leg], leg)) - self.cfg.leg_usd) > self.cfg.effective_tranche_usd / 2
                 for leg in _LEGS)
             if side == cur_side and not resize and not recycle:
                 self._strategy_reason += " : paire conservée, aucun ordre"
@@ -604,7 +604,7 @@ class PairOrchestrator:
         else:
             cur = self._plan_start(pos)
         reopen = not flip if self.cfg.signal_mode == "mean_reversion" else recycle
-        steps = plan_cycle(cur, target_usd(side, self.cfg.leg_usd), self.cfg.tranche_usd, reopen=reopen)
+        steps = plan_cycle(cur, target_usd(side, self.cfg.leg_usd), self.cfg.effective_tranche_usd, reopen=reopen)
         prices = {leg: self._price(leg) for leg in _LEGS}
         # Consume before execution: uncertain/failed fills never repeat a forced entry.
         if manual_side is not None:
@@ -637,7 +637,7 @@ class PairOrchestrator:
                 price = self._price(leg)
                 if price is None or not math.isfinite(price) or price <= 0:
                     raise ValueError("prix invalide")
-                q = await self.var.quote(self.assets[leg], self.cfg.kind, self.cfg.tranche_usd / price)
+                q = await self.var.quote(self.assets[leg], self.cfg.kind, self.cfg.effective_tranche_usd / price)
                 if not all(math.isfinite(v) for v in (q.bid, q.ask, q.mid)) or not (0 < q.bid <= q.ask):
                     raise ValueError("cotation invalide")
                 spread += (q.ask - q.bid) / q.mid * 1e4
@@ -666,7 +666,7 @@ class PairOrchestrator:
         """Position de départ pour plan_cycle, arrondie à un nombre entier de tranches (au moins
         une) : chaque jambe ouverte est fermée en entier, et les fermetures partent en quantité
         (PairExecutor), seul le nombre de tranches compte."""
-        tr = self.cfg.tranche_usd
+        tr = self.cfg.effective_tranche_usd
         out = {}
         for leg in _LEGS:
             q = pos[leg]["qty"]
@@ -693,7 +693,7 @@ class PairOrchestrator:
             # reopen=True : chaque jambe est ramenée à 0 en tranches reduce-only (sans, plan_cycle
             # produirait des ordres ordinaires).
             try:
-                steps = plan_cycle(self._plan_start(pos), {"wti": 0.0, "brent": 0.0}, self.cfg.tranche_usd,
+                steps = plan_cycle(self._plan_start(pos), {"wti": 0.0, "brent": 0.0}, self.cfg.effective_tranche_usd,
                                    reopen=True)
                 prices = {leg: self._last_px(leg, pos[leg]) for leg in _LEGS}
                 ok = await self._execute(steps, prices, f"fermeture ({why})")
@@ -730,7 +730,7 @@ class PairOrchestrator:
         except Exception as exc:
             self.journal.record_incident("PAIR", "warn", f"réconciliation impossible : {exc}")
             return
-        tr = self.cfg.tranche_usd
+        tr = self.cfg.effective_tranche_usd
         drift = []
         for leg in _LEGS:
             real, book = pos[leg]["qty"], self._book[leg]

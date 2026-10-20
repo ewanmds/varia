@@ -46,7 +46,7 @@ _MIN_EDGE_BPS_MAX = 20.0
 _MIN_EDGE_MSG = "le seuil doit être compris entre 1 et 20 pb"
 _PARAM_FIELDS = ("min_edge_bps", "fill_usd", "max_position_usd")
 # Bornes de POST /api/pair/params (mode paire pétrole) : (min, max) inclusives.
-_PAIR_BOUNDS = {"leg_usd": (1000.0, 10000.0), "cycle_min": (1.0, 60.0), "daily_loss_usd": (20.0, 1000.0), "volume_cycle_min": (0.0, 60.0)}
+_PAIR_BOUNDS = {"leg_usd": (20.0, 10000.0), "cycle_min": (1.0, 60.0), "daily_loss_usd": (20.0, 1000.0), "volume_cycle_min": (0.0, 60.0)}
 ALLOWED_HOSTS = ["127.0.0.1", "localhost"]
 _AUTH_MSG = "Session wallet absente ou expirée : reconnectez le wallet."
 
@@ -330,10 +330,6 @@ def create_app(ctx) -> FastAPI:
                 raise HTTPException(400, f"{k} doit être compris entre {lo:g} et {hi:g}")
             if k == "volume_cycle_min" and 0 < v < 1:
                 raise HTTPException(400, "cycle volume : 0 ou au moins 1 minute")
-            if k == "leg_usd":
-                tr = orch.cfg.tranche_usd
-                if tr > 0 and abs(v / tr - round(v / tr)) > 1e-9:
-                    raise HTTPException(400, f"leg_usd doit être un multiple de {tr:g}")
             updates[k] = v
         for k, v in updates.items():
             setattr(orch.cfg, k, v)

@@ -27,6 +27,10 @@ peut aussi différer un retournement : la paire précédente reste alors ouverte
 ## Paramètres actuels
 
 - 1 000 $ par jambe ; tranches de 500 $ ; contrôle toutes les minutes.
+- Taille réglable de 20 à 10 000 $ par jambe, sans obligation de multiple de 500.
+  Avec la tranche configurée à 500 $, une jambe de 20 $ ouvre un ordre de 20 $,
+  750 $ ouvre 500 + 250 $, et 1 000 $ conserve deux ordres de 500 $.
+  Les jambes restent alternées ; les seuils d'équilibrage s'adaptent aux petites tailles.
 - Source active : bougies **1 minute TradingView TVC:USOIL et TVC:UKOIL**.
 - Ratio des clôtures portant exactement le même horodatage ; la bougie en cours est exclue.
 - Une bougie doit déjà être close au début de la requête TradingView pour

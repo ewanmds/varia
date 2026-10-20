@@ -115,6 +115,41 @@ class J:
 async def nosleep(s): pass
 
 
+@pytest.mark.parametrize("size,slices", [(20, [20]), (50, [50]), (750, [500, 250]), (1000, [500, 500])])
+async def test_small_legs_open_flip_recycle_and_close(size, slices):
+    cfg = PairCfg(leg_usd=size, tranche_usd=500, order_gap_s=0)
+    var = FakeVar()
+    executor = PairExecutor(var, cfg, J(), sleep=nosleep)
+    current = {"wti": 0.0, "brent": 0.0}
+    for target, reopen in [(target_usd("A", size), False),
+                           (target_usd("B", size), False),
+                           (target_usd("B", size), True),
+                           ({"wti": 0.0, "brent": 0.0}, True)]:
+        steps = plan_cycle(current, target, cfg.effective_tranche_usd, reopen)
+        for leg in ("wti", "brent"):
+            openings = [s.usd for s in steps if s.leg == leg and not s.reduce_only]
+            assert openings == (slices if target[leg] else [])
+        result = await executor.run_steps(steps, PRICES)
+        assert result.ok, result.reason
+        actual = usd_pos(var)
+        for leg in target:
+            assert actual[leg] == pytest.approx(target[leg], abs=0.2)
+        current = target
+
+
+async def test_failed_small_leg_hedge_rebalances_instead_of_leaving_one_leg():
+    cfg = PairCfg(leg_usd=20, tranche_usd=500, order_gap_s=0)
+    var = FakeVar(script={1: "reject", 2: "reject"})
+    executor = PairExecutor(var, cfg, J(), sleep=nosleep)
+    steps = plan_cycle({"wti": 0, "brent": 0}, target_usd("A", 20),
+                       cfg.effective_tranche_usd, False)
+    result = await executor.run_steps(steps, PRICES)
+    assert not result.ok
+    assert len(var.orders) == 2
+    assert var.orders[-1][2] is True
+    assert all(abs(value) < 0.1 for value in usd_pos(var).values())
+
+
 def ex(var):
     return PairExecutor(var, PairCfg(order_gap_s=0), J(), sleep=nosleep)
 

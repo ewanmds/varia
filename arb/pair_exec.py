@@ -338,7 +338,7 @@ class PairExecutor:
         except Exception as exc:
             res.ok, res.reason = False, f"déséquilibre : contrôle final impossible ({exc})"
             return res
-        if abs(gap) > _BALANCE_TOL_TRANCHE * self.cfg.tranche_usd:
+        if abs(gap) > _BALANCE_TOL_TRANCHE * self.cfg.effective_tranche_usd:
             res.ok, res.reason = False, f"écart final de {gap:.0f} $ entre les jambes"
             await self._rebalance(res)
         return res
@@ -399,7 +399,7 @@ class PairExecutor:
     async def _rebalance(self, res: ExecResult) -> None:
         """Depuis les positions RÉELLES, valorisées au prix courant : reduce-only en quantité sur
         la plus grosse jambe, puis relecture de l'écart."""
-        tol = _BALANCE_TOL_TRANCHE * self.cfg.tranche_usd
+        tol = _BALANCE_TOL_TRANCHE * self.cfg.effective_tranche_usd
         orig = res.reason
         try:
             v = await self._valued_positions()

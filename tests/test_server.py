@@ -499,7 +499,8 @@ def test_pair_params_partial_update():
 
 
 @pytest.mark.parametrize("payload", [
-    {"leg_usd": 999}, {"leg_usd": 10001}, {"leg_usd": 3000},  # 3000 n'est pas multiple de 2500
+    {"leg_usd": 19.99}, {"leg_usd": 0}, {"leg_usd": -20}, {"leg_usd": 10001},
+    {"leg_usd": "nan"}, {"leg_usd": "inf"},
     {"cycle_min": 0.9}, {"cycle_min": 61}, {"daily_loss_usd": 19}, {"daily_loss_usd": 1001},
     {"leg_usd": "abc"}, {"cycle_min": None}, {"leg_usd": True},
     {"leg_usd": 5000, "cycle_min": 100},  # un champ invalide annule tout
@@ -515,6 +516,18 @@ def test_pair_resume_calls_resume():
     ctx = PairCtx()
     assert _client(ctx).post("/api/pair/resume").status_code == 200
     assert ctx.orch.resumed == 1
+
+
+@pytest.mark.parametrize("size", [20, 20.5, 50, 250, 499, 500, 750, 999, 1000, 3000, 10000])
+def test_pair_params_accepts_small_and_non_multiple_legs(size):
+    ctx = PairCtx()
+    ctx.orch.cfg.tranche_usd = 500
+    response = _client(ctx).post("/api/pair/params", json={"leg_usd": size})
+    assert response.status_code == 200
+    assert response.json()["leg_usd"] == size
+    assert ctx.orch.cfg.leg_usd == size
+    assert ctx.orch.cfg.effective_tranche_usd == min(size, 500)
+    assert ctx.orch.cfg.tranche_usd == 500
 
 
 def test_pair_endpoints_409_without_pair_orchestrator():
